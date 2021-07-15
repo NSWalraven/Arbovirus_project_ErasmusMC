@@ -1,0 +1,152 @@
+import sys
+
+FILES, = glob_wildcards("project_data/fastq_pass/barcode{bc}/{file}.fastq")
+if len(FILES) == 0:
+    sys.exit()
+
+BARCODES = config["barcodes"]
+
+HG38 = "/cvmfs/data.galaxyproject.org/byhand/hg38/seq/hg38.fa"
+COVERAGE = ["30"]
+DATABASE_KRAKEN= "Kraken_Project"
+
+rule all:
+    input: 
+        expand("krona_out/barcode{bc}_{coverage}.krona.html", bc=BARCODES, coverage=COVERAGE),
+
+rule merge_barcodes:
+    priority:11
+    input:
+        expand("project_data/fastq_pass/barcode{bc}/{file}.fastq", bc=BARCODES, file=FILES)
+    output:
+        "merged/barcode{bc}.fastq"
+    threads: 1
+    shell:
+        """
+        cat {input} > {output}
+        """
+ 
+rule cut_adapters:
+    priority: 10
+    input:
+        "merged/barcode{bc}.fastq"
+    output:
+        "trimmed/barcode{bc}_trimmed.fastq"
+    threads: 1
+    shell:
+        """
+        cutadapt -u 30 -u -30 -o {output} {input} -m 75 -j {threads} 
+        """
+
+rule filter_human_out:
+    priority: 9
+    input:
+        trimmed_fastq="trimmed/barcode{bc}_trimmed.fastq",
+        reference=HG38
+    output:
+        "filtered_new/barcode{bc,\d+}_filtered.fastq"
+    threads: 8
+    shell:
+        """
+        minimap2 -Y -t {threads} -x map-ont -a {input.reference} {input.trimmed_fastq} 2> /dev/null | samtools fastq -f 4 - 2> /dev/null > {output} 
+	"""
+
+rule all_vs_all:
+    priority: 8
+    input:
+        "filtered_new/barcode{bc}_filtered.fastq",
+    output:
+        "minimap2allvsall/barcode{bc,\d+}_reads.sam"
+    threads: 4
+    shell:
+        """
+        minimap2 -a -t {threads} -x ava-ont {input} {input} | gzip -1 > {output}
+        """
+
+rule racon:
+    priority: 7
+    input:
+        all="minimap2allvsall/barcode{bc}_reads.sam",
+        filtered="filtered_new/barcode{bc}_filtered.fastq"       
+    output:
+        "racon/barcode{bc,\d+}_racon.fasta"
+    threads: 16
+    shell:
+        """
+        racon -t {threads} {input.filtered} {input.all} {input.filtered} > {output}
+        """
+
+rule medaka:
+    priority: 6
+    input:
+        filtered="filtered_new/barcode{bc}_filtered.fastq",
+        racon="racon/barcode{bc}_racon.fasta"       
+    output:
+        directory("consensus_medaka/barcode{bc,\d+}")
+    threads: 16
+    shell:
+        """
+        medaka_consensus -i {input.filtered} -d {input.racon} -o {output} 
+        """
+
+rule moving_fasta_file_1:
+    priority: 5
+    input:
+         "consensus_medaka/barcode{bc}"    
+    output:
+        "consensus_barcode{bc,\d+}.fasta"
+    threads: 1
+    shell:
+        """
+	mv {input}/consensus.fasta consensus_barcode{wildcards.bc}.fasta
+        """
+
+rule moving_fasta_file_2:
+    priority: 4
+    input:
+         "consensus_barcode{bc}.fasta"    
+    output:
+        "consensus_medaka_only_fasta/barcode{bc,\d+}"
+    threads: 1
+    shell:
+        """
+	mv {input} {output} 
+        """
+
+rule kraken2:
+    priority: 3
+    input:
+        "consensus_medaka_only_fasta/barcode{bc}"
+    output:
+        "kraken_out/barcode{bc,\d+}.report"
+    params:
+        database=DATABASE_KRAKEN
+    threads: 1
+    shell:
+        """
+        kraken2 --db {params.database} -t {threads} --report {output} --input {input} --confidence
+        """
+
+rule convert_kraken:
+    priority: 2
+    input:
+        "kraken_out/barcode{bc}.report" 
+    output:
+        "converted_kraken/barcode{bc,\d+}.krona"
+    threads: 1
+    shell:
+        """
+        python /mnt/StudentFiles/2020-21/Project7/KrakenTools-master/kreport2krona.py -r {input} -o {output} 
+        """
+
+rule krona:
+    priority: 1
+    input:
+        "converted_kraken/barcode{bc}.krona"      
+    output:
+        "krona_out/barcode{bc,\d+}_{coverage}.krona.html"
+    threads: 1
+    shell:
+        """
+        ktImportText {input} -o {output}
+        """

@@ -1,0 +1,54 @@
+import sys
+
+FILES, = glob_wildcards("project_data/fastq_pass/barcode{bc}/{file}.fastq")
+if len(FILES) == 0:
+    sys.exit()
+
+BARCODES = config["barcodes"]
+
+HG38 = "/cvmfs/data.galaxyproject.org/byhand/hg38/seq/hg38.fa"
+COVERAGE = ["30"]
+DATABASE_KRAKEN= "Kraken_Project"
+
+rule all:
+    input: 
+        expand("nanoplot_res/barcode{bc}/", bc=BARCODES, coverage=COVERAGE),
+	"nanoplot_trimmed_res/barcode{bc}/",
+	"nanoplot_filtered_res/barcode{bc}/"
+
+rule quality_start:
+    priority:2
+    input:
+        expand("project_data/fastq_pass/barcode{bc}/{file}.fastq", bc=BARCODES, file=FILES)
+    output:
+        "nanoplot_res/barcode{bc}/"
+    threads: 1
+    shell:
+        """
+        NanoPlot --raw --fastq {input} -t {threads} -o {output} --plots hex dot -p {bc} --barcoded
+        """
+
+rule quality_after_trim:
+    priority:1
+    input:
+        "trimmed/barcode{bc}_trimmed.fastq"
+    output:
+        "nanoplot_trimmed_res/barcode{bc}/"
+    threads: 1
+    shell:
+        """
+        NanoPlot --raw --fastq {input} -t {threads} -o {output} --plots hex dot -p {bc} --barcoded
+        """
+	
+
+rule quality_after_filter:
+    priority:0
+    input:
+        "filtered_new/barcode{bc,\d+}_filtered.fastq"
+    output:
+        "nanoplot_filtered_res/barcode{bc}/"
+    threads: 1
+    shell:
+        """
+        NanoPlot --raw --fastq {input} -t {threads} -o {output} --plots hex dot -p {bc} --barcoded
+        """
